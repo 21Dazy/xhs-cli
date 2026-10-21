@@ -346,8 +346,8 @@ class XhsClient:
                 const text = (el) => (el?.textContent || '').replace(/\\s+/g, ' ').trim();
                 const title =
                     text(document.querySelector('#detail-title')) ||
-                    text(document.querySelector('[class*="note-content"] [class*="title"]')) ||
-                    text(document.querySelector('h1'));
+                    text(document.querySelector('[class*="note-detail"] > .title')) ||
+                    text(document.querySelector('[class*="note-content"] > .title'));
                 const desc =
                     text(document.querySelector('#detail-desc')) ||
                     text(document.querySelector('[class*="note-text"]')) ||
