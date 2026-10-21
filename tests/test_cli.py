@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from contextlib import contextmanager
 
 import pytest
@@ -34,7 +35,8 @@ class TestCliHelp:
         for cmd in ["login", "logout", "status", "whoami", "search", "read",
                      "feed", "topics", "user", "user-posts", "followers",
                      "following", "like", "unlike", "comment", "favorite",
-                     "unfavorite", "favorites", "post", "delete"]:
+                     "unfavorite", "favorites", "post", "delete", "metrics",
+                     "recent"]:
             assert cmd in result.output, f"Command '{cmd}' not found in --help output"
 
     def test_search_help(self, runner):
@@ -189,6 +191,61 @@ class TestLoginCookieValidation:
         assert result.exit_code == 1
         assert called["cleared"] is True
         assert "session is still limited" in result.output
+
+    def test_login_qrcode_png_is_forwarded(self, runner, tmp_config_dir, monkeypatch):
+        seen = {}
+
+        def _fake_qrcode_login(qr_png_path=None):
+            seen["path"] = qr_png_path
+            return "a1=new; web_session=new"
+
+        monkeypatch.setattr(cli_module, "qrcode_login", _fake_qrcode_login)
+        monkeypatch.setattr(cli_module, "_probe_session_usability", lambda _cookie_dict: True)
+
+        result = runner.invoke(
+            cli,
+            ["login", "--qrcode", "--qr-png", "/tmp/fumiemie-login.png"],
+        )
+        assert result.exit_code == 0
+        assert seen["path"] == "/tmp/fumiemie-login.png"
+
+
+class TestCreatorAnalytics:
+    def test_metrics_json(self, runner, monkeypatch):
+        class _Client:
+            def get_creator_metrics(self):
+                return {
+                    "account_name": "小红薯6AD8C8B4",
+                    "total_fans": "0",
+                    "published_notes": "0",
+                }
+
+        @contextmanager
+        def _fake_get_client():
+            yield _Client()
+
+        monkeypatch.setattr(cli_module, "_get_client", _fake_get_client)
+        result = runner.invoke(cli, ["metrics", "--json"])
+        assert result.exit_code == 0
+        assert json.loads(result.output)["account_name"] == "小红薯6AD8C8B4"
+
+    def test_recent_json_and_limit(self, runner, monkeypatch):
+        seen = {}
+
+        class _Client:
+            def get_recent_creator_notes(self, limit):
+                seen["limit"] = limit
+                return [{"id": "note1", "title": "最近笔记"}]
+
+        @contextmanager
+        def _fake_get_client():
+            yield _Client()
+
+        monkeypatch.setattr(cli_module, "_get_client", _fake_get_client)
+        result = runner.invoke(cli, ["recent", "--limit", "5", "--json"])
+        assert result.exit_code == 0
+        assert json.loads(result.output)[0]["id"] == "note1"
+        assert seen["limit"] == 5
 
 class TestLogout:
     def test_logout_with_cookies(self, runner, tmp_config_dir):

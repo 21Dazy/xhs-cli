@@ -37,6 +37,7 @@ All commands require valid cookies to function.
 xhs status                     # Check saved login session (no browser extraction)
 xhs login                      # Auto-extract Chrome cookies
 xhs login --cookie "a1=..."    # Or provide cookies manually
+xhs login --qrcode --qr-png /tmp/xhs-login.png  # Remote-gateway QR image
 ```
 
 Authentication first uses saved local cookies. If unavailable, it auto-detects local Chrome cookies via browser-cookie3. If extraction fails, QR code login is available.
@@ -128,6 +129,15 @@ xhs login                      # Login
 xhs logout                     # Clear cookies
 ```
 
+### Creator Analytics
+
+```bash
+xhs metrics                    # Current creator account overview
+xhs metrics --json
+xhs recent --limit 10          # Recent creator-managed notes
+xhs recent --limit 10 --json
+```
+
 ## JSON Output
 
 Major query commands support `--json` for machine-readable output:
@@ -160,6 +170,8 @@ xhs read <note_id> --comments --json
 - Error messages are prefixed with ❌
 - Login-required commands show clear instruction to run `xhs login`
 - `xsec_token` is auto-resolved from cache; manual `--xsec-token` available as fallback
+- For third-party public notes, preserve the complete `/search_result/<id>?xsec_token=...` URL
+- Search, note detail, and current-user identity use DOM fallbacks when newer web builds do not expose `window.__INITIAL_STATE__`
 
 ## Safety Notes
 

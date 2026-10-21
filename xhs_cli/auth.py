@@ -158,12 +158,12 @@ print(json.dumps({"error": "no_cookies"}))
         return None
 
 
-def qrcode_login() -> str:
+def qrcode_login(qr_png_path: str | None = None) -> str:
     """Login via QR code displayed to the user."""
-    return _browser_assisted_qrcode_login()
+    return _browser_assisted_qrcode_login(qr_png_path=qr_png_path)
 
 
-def _browser_assisted_qrcode_login() -> str:
+def _browser_assisted_qrcode_login(qr_png_path: str | None = None) -> str:
     """Login via QR code using network responses instead of page DOM heuristics."""
     import time
 
@@ -212,6 +212,14 @@ def _browser_assisted_qrcode_login() -> str:
         qr_url = str(qr_payload.get("url", "")).strip()
         if not qr_url:
             raise LoginError(f"QR login did not expose a QR URL: {qr_payload}")
+
+        if qr_png_path:
+            import qrcode
+
+            output = Path(qr_png_path).expanduser()
+            output.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            qrcode.make(qr_url).save(output)
+            output.chmod(0o600)
 
         print("\n📱 Scan the QR code below with the Xiaohongshu app:\n")
         if not _display_qr_text_in_terminal(qr_url):

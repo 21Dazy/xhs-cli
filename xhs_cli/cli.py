@@ -101,8 +101,20 @@ def cli(verbose: bool):
 @cli.command()
 @click.option("--qrcode", is_flag=True, help="Force QR code login")
 @click.option("--cookie", "cookie_str", default=None, help="Manually provide cookie string")
+@click.option(
+    "--qr-png",
+    "qr_png",
+    default=None,
+    type=click.Path(dir_okay=False),
+    help="Save the QR code as a PNG for gateway delivery.",
+)
 @click.pass_context
-def login(ctx: click.Context, qrcode: bool, cookie_str: str | None):
+def login(
+    ctx: click.Context,
+    qrcode: bool,
+    cookie_str: str | None,
+    qr_png: str | None,
+):
     """Login to Xiaohongshu."""
     cookie_provided = (
         ctx.get_parameter_source("cookie_str") == ParameterSource.COMMANDLINE
@@ -157,7 +169,7 @@ def login(ctx: click.Context, qrcode: bool, cookie_str: str | None):
     # QR code login
     console.print("[dim]Falling back to QR code login...[/dim]")
     try:
-        cookie = qrcode_login()
+        cookie = qrcode_login(qr_png_path=qr_png) if qr_png else qrcode_login()
         cookie_dict = cookie_str_to_dict(cookie)
         probe_result = _probe_session_usability(cookie_dict)
         if probe_result is False:
@@ -364,6 +376,60 @@ def whoami(as_json: bool):
         raise
     except Exception as e:
         console.print(f"[red]❌ Failed to get profile: {e}[/red]")
+        sys.exit(1)
+
+
+# ===== Creator Analytics =====
+
+@cli.command()
+@click.option("--json", "as_json", is_flag=True, help="Output raw JSON")
+def metrics(as_json: bool):
+    """Read creator dashboard metrics."""
+    try:
+        with _get_client() as client:
+            data = client.get_creator_metrics()
+            if as_json:
+                click.echo(json.dumps(data, indent=2, ensure_ascii=False))
+                return
+            console.print(f"账号: {data.get('account_name', '')}")
+            console.print(
+                f"总粉丝: {data.get('total_fans', '0')}  "
+                f"净增: {data.get('net_fans_growth', '0')}"
+            )
+            console.print(
+                f"点赞: {data.get('likes', '0')}  "
+                f"收藏: {data.get('favorites', '0')}"
+            )
+            console.print(
+                f"笔记数: {data.get('published_notes', '0')}  "
+                f"阅读: {data.get('reads', '0')}"
+            )
+    except Exception as e:
+        console.print(f"[red]❌ Failed to get creator metrics: {e}[/red]")
+        sys.exit(1)
+
+
+@cli.command()
+@click.option("--limit", "limit", default=20, type=int, help="Maximum notes to return")
+@click.option("--json", "as_json", is_flag=True, help="Output raw JSON")
+def recent(limit: int, as_json: bool):
+    """Read recent notes from the creator dashboard."""
+    try:
+        with _get_client() as client:
+            notes = client.get_recent_creator_notes(limit=max(1, min(limit, 100)))
+            if as_json:
+                click.echo(json.dumps(notes, indent=2, ensure_ascii=False))
+                return
+            if not notes:
+                console.print("No recent creator notes found.")
+                return
+            for index, note in enumerate(notes, 1):
+                console.print(
+                    f"{index}. {note.get('title', '')} "
+                    f"[dim]{note.get('id', '')}[/dim]"
+                )
+    except Exception as e:
+        console.print(f"[red]❌ Failed to get recent creator notes: {e}[/red]")
         sys.exit(1)
 
 

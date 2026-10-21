@@ -22,9 +22,11 @@
 - **用户资料** — 查看用户信息、笔记、粉丝、关注
 - **推荐 Feed** — 获取探索页推荐内容
 - **话题** — 搜索话题标签
+- **创作者数据** — 读取账号概览和最近发布笔记
 - **互动** — 点赞/取消、收藏/取消、评论、删除笔记
 - **发布** — 发布图文笔记
 - **认证** — 自动提取 Chrome cookie，或 browser-assisted 扫码登录（终端二维码渲染）
+- **远程扫码** — `--qr-png` 将登录二维码保存为图片，便于飞书等网关转发
 - **JSON 输出** — 所有数据命令支持 `--json`
 - **Token 自动缓存** — `xsec_token` 搜索后自动缓存，后续命令免手动传
 
@@ -34,6 +36,7 @@
 |------|------|------|
 | Auth | `login`, `logout`, `status`, `whoami` | 登录、退出、状态检查、查看个人资料 |
 | Read | `search`, `read`, `feed`, `topics` | 搜索笔记、阅读详情、推荐 Feed、搜索话题 |
+| Creator | `metrics`, `recent` | 读取创作者后台账号指标和最近笔记 |
 | Users | `user`, `user-posts`, `followers`, `following` | 查看资料、列出笔记/粉丝/关注 |
 | Engage | `like`, `unlike`, `comment`, `delete` | 点赞、取消点赞、评论、删除笔记 |
 | Favorites | `favorite`, `unfavorite`, `favorites` | 收藏、取消收藏、查看收藏列表 |
@@ -71,7 +74,7 @@ pipx install xhs-cli
 <summary>从源码安装（开发用）</summary>
 
 ```bash
-git clone git@github.com:jackwener/xhs-cli.git
+git clone git@github.com:21Dazy/xhs-cli.git
 cd xhs-cli
 uv sync
 ```
@@ -119,6 +122,9 @@ xhs login
 # 强制使用二维码登录（用于排查登录问题）
 xhs login --qrcode
 
+# 将二维码保存为 PNG，供远程网关发送
+xhs login --qrcode --qr-png /tmp/xhs-login.png
+
 # 手动提供 cookie 字符串（至少包含 a1 和 web_session）
 xhs login --cookie "a1=xxx; web_session=yyy"
 
@@ -132,6 +138,18 @@ xhs whoami --json
 # 退出登录
 xhs logout
 ```
+
+### 创作者数据
+
+```bash
+xhs metrics
+xhs metrics --json
+xhs recent --limit 10
+xhs recent --limit 10 --json
+```
+
+`metrics` 读取当前登录账号的创作者概览；`recent` 读取创作者后台最近笔记。
+两者都使用 Camoufox 无头浏览器，无需 Xvfb。
 
 ### 搜索
 
@@ -216,17 +234,17 @@ xhs --help
 ```
 CLI (click) → XhsClient (camoufox 浏览器)
                   ↓ 导航到真实页面
-              window.__INITIAL_STATE__ → 提取结构化数据
+              window.__INITIAL_STATE__ → DOM 兜底 → 结构化数据
 ```
 
-使用 [camoufox](https://github.com/daijro/camoufox)（反指纹 Firefox）像真实用户一样浏览小红书。数据从页面的 `window.__INITIAL_STATE__` 中提取，与正常浏览完全一致。
+使用 [camoufox](https://github.com/daijro/camoufox)（反指纹 Firefox）像真实用户一样浏览小红书。数据优先从 `window.__INITIAL_STATE__` 提取，新网页不再暴露 state 时使用 DOM 兜底。
 
 ## 工作原理
 
-1. **认证** — 优先读取 `~/.xhs-cli/cookies.json`；未命中时通过 browser-cookie3 从本地 Chrome 提取 cookie。`xhs login --qrcode` 使用 browser-assisted 扫码登录，并在终端渲染二维码（`▀ ▄ █`）。
+1. **认证** — 优先读取 `~/.xhs-cli/cookies.json`；未命中时通过 browser-cookie3 从本地 Chrome 提取 cookie。`xhs login --qrcode` 使用 browser-assisted 扫码登录，并在终端渲染二维码（`▀ ▄ █`）；`--qr-png FILE` 会额外保存可经飞书等网关发送的图片。
 2. **登录态校验** — 登录后会校验会话是否为有效非 guest 会话，并做 feed/search 可用性探活；探活失败会提示重新登录。
 3. **浏览** — 使用 camoufox 导航到真实页面，所有流量与正常用户浏览一致。
-4. **数据提取** — 从 `window.__INITIAL_STATE__` 提取结构化数据。
+4. **数据提取** — 优先从 `window.__INITIAL_STATE__` 提取结构化数据；新网页不再暴露 state 时，搜索、笔记详情和当前用户身份使用 DOM 兜底。
 5. **Token 缓存** — 搜索/Feed 后 `xsec_token` 自动缓存到 `~/.xhs-cli/token_cache.json`。
 6. **互动操作** — 点赞、收藏、评论通过点击真实 DOM 按钮实现。
 
@@ -237,7 +255,7 @@ xhs-cli 自带 [`SKILL.md`](./SKILL.md)，让 AI Agent 能自动学习并使用�
 ### [Skills CLI](https://github.com/vercel-labs/skills)（推荐）
 
 ```bash
-npx skills add jackwener/xhs-cli
+npx skills add 21Dazy/xhs-cli
 ```
 
 | 参数 | 说明 |
@@ -250,7 +268,7 @@ npx skills add jackwener/xhs-cli
 
 ```bash
 mkdir -p .agents/skills
-git clone git@github.com:jackwener/xhs-cli.git .agents/skills/xhs-cli
+git clone git@github.com:21Dazy/xhs-cli.git .agents/skills/xhs-cli
 ```
 
 添加后，支持 `.agents/skills/` 的 AI Agent 会自动发现并使用 xhs-cli 命令。

@@ -44,6 +44,73 @@ class _FakeWaitPage:
         return self._body
 
 
+class _ScriptedPage:
+    def __init__(self, url: str, results):
+        self.url = url
+        self._results = list(results)
+
+    def evaluate(self, _script, *_args):
+        if not self._results:
+            return None
+        return self._results.pop(0)
+
+
+class TestStateFallbacks:
+    def test_search_uses_dom_when_initial_state_is_unavailable(self, monkeypatch):
+        dom_items = [
+            {
+                "id": "note123",
+                "xsec_token": "token123",
+                "note_card": {"display_title": "DOM 搜索结果"},
+                "url": "https://www.xiaohongshu.com/search_result/note123?xsec_token=token123",
+            }
+        ]
+        client = XhsClient({})
+        client._page = _ScriptedPage(
+            "https://www.xiaohongshu.com/search_result?keyword=test",
+            [None, dom_items],
+        )
+        monkeypatch.setattr(client, "_goto", lambda *_args, **_kwargs: None)
+        monkeypatch.setattr(client, "_wait_for_data", lambda *_args, **_kwargs: None)
+
+        result = client.search_notes("test")
+        assert result[0]["id"] == "note123"
+        assert result[0]["xsec_token"] == "token123"
+
+    def test_note_detail_uses_dom_when_initial_state_is_unavailable(self, monkeypatch):
+        dom_detail = {
+            "title": "公开标题",
+            "desc": "公开正文",
+            "author": "公开作者",
+            "commentCount": "3",
+            "images": ["https://example.invalid/note.jpg"],
+            "pageUrl": "https://www.xiaohongshu.com/explore/note123?xsec_token=token123",
+        }
+        client = XhsClient({})
+        client._page = _ScriptedPage(
+            "https://www.xiaohongshu.com/explore/note123",
+            [False, None, None, None, dom_detail],
+        )
+        monkeypatch.setattr(client, "_goto", lambda *_args, **_kwargs: None)
+        monkeypatch.setattr(client, "_human_wait", lambda *_args, **_kwargs: None)
+        monkeypatch.setattr("xhs_cli.client.time.sleep", lambda *_args, **_kwargs: None)
+
+        result = client.get_note_detail("note123", "token123")
+        assert result["note"]["title"] == "公开标题"
+        assert result["note"]["desc"] == "公开正文"
+        assert "xsec_token=token123" in result["note"]["url"]
+
+    def test_self_info_uses_dom_when_initial_state_is_unavailable(self):
+        client = XhsClient({})
+        client._page = _ScriptedPage(
+            "https://www.xiaohongshu.com",
+            [{"userId": "user123", "nickname": "DOM 用户"}],
+        )
+        result = client._self_info_from_dom()
+        assert result["basicInfo"]["userId"] == "user123"
+        assert result["basicInfo"]["nickname"] == "DOM 用户"
+
+
 class TestGetNoteComments:
     def test_extracts_note_comments_and_applies_max_limit(self):
         client = XhsClient({})

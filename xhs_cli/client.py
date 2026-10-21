@@ -176,20 +176,25 @@ class XhsClient:
             context="loading search page",
         )
 
-        # Wait for search.feeds to be populated by Vue
-        self._wait_for_data(
-            """() => {
-                const s = window.__INITIAL_STATE__;
-                if (!s || !s.search) return false;
-                const f = s.search.feeds;
-                if (!f) return false;
-                const d = f._rawValue || f._value || f.value || f;
-                return Array.isArray(d) || (d && typeof d === 'object');
-            }""",
-            timeout=15.0,
-            desc="search.feeds",
-            raise_on_timeout=True,
-        )
+        # Wait for search.feeds when the current web build still exposes state.
+        # Newer builds may render search cards from API data without leaving
+        # __INITIAL_STATE__ on window, so a DOM fallback is required.
+        try:
+            self._wait_for_data(
+                """() => {
+                    const s = window.__INITIAL_STATE__;
+                    if (!s || !s.search) return false;
+                    const f = s.search.feeds;
+                    if (!f) return false;
+                    const d = f._rawValue || f._value || f.value || f;
+                    return Array.isArray(d) || (d && typeof d === 'object');
+                }""",
+                timeout=4.0,
+                desc="search.feeds",
+                raise_on_timeout=False,
+            )
+        except LoginError:
+            raise
 
         # Extract search feeds
         result = self._page.evaluate(
@@ -203,10 +208,62 @@ class XhsClient:
         }"""
         )
 
-        if not result:
-            logger.warning("No search results found in __INITIAL_STATE__")
-            return []
+        if result:
+            return result if isinstance(result, list) else []
 
+        logger.info("__INITIAL_STATE__ unavailable; extracting search cards from DOM")
+        return self._search_from_dom()
+
+    def _search_from_dom(self) -> list[dict]:
+        """Extract the visible search cards, preserving xsec_token URLs."""
+        result = self._page.evaluate(
+            """() => {
+                const anchors = Array.from(
+                    document.querySelectorAll('a[href*="/search_result/"]')
+                );
+                const seen = new Set();
+                const out = [];
+                const text = (el) => (el?.textContent || '').replace(/\\s+/g, ' ').trim();
+                for (const anchor of anchors) {
+                    const href = anchor.href || anchor.getAttribute('href') || '';
+                    const idMatch = href.match(/\\/search_result\\/([^/?#]+)/);
+                    if (!idMatch || !href.includes('xsec_token=')) continue;
+                    const id = idMatch[1];
+                    if (seen.has(id)) continue;
+                    seen.add(id);
+                    let card = anchor;
+                    for (let i = 0; i < 4 && card.parentElement; i += 1) {
+                        card = card.parentElement;
+                        if (card.querySelector('img') && text(card).length > 10) break;
+                    }
+                    const img = card.querySelector('img');
+                    const titleEl =
+                        card.querySelector('[class*="title"]') ||
+                        anchor.closest('[class*="note"]')?.querySelector('[class*="title"]');
+                    const authorEl =
+                        card.querySelector('[class*="author"] [class*="name"]') ||
+                        card.querySelector('[class*="nickname"]');
+                    const likeEl =
+                        card.querySelector('[class*="like"]') ||
+                        card.querySelector('[class*="count"]');
+                    const token =
+                        new URL(href, location.origin).searchParams.get('xsec_token') || '';
+                    out.push({
+                        id,
+                        xsec_token: token,
+                        xsec_source: 'pc_search',
+                        note_card: {
+                            display_title: text(titleEl) || text(anchor).slice(0, 80) || '无标题',
+                            user: { nickname: text(authorEl) || '未知作者' },
+                            interact_info: { liked_count: text(likeEl) || '—' },
+                            cover: { url_default: img?.currentSrc || img?.src || '' },
+                        },
+                        url: new URL(href, location.origin).toString(),
+                    });
+                }
+                return out;
+            }"""
+        )
         return result if isinstance(result, list) else []
 
     # ===== Note Detail =====
@@ -229,16 +286,30 @@ class XhsClient:
             context=f"loading note {note_id}",
         )
 
-        self._wait_for_data(
-            """() => {
-                const s = window.__INITIAL_STATE__;
-                return s && s.note && s.note.noteDetailMap
-                    && Object.keys(s.note.noteDetailMap).length > 0;
-            }""",
-            timeout=15.0,
-            desc="note.noteDetailMap",
-            raise_on_timeout=True,
-        )
+        has_state = False
+        try:
+            has_state = bool(
+                self._page.evaluate(
+                    """() => {
+                        const s = window.__INITIAL_STATE__;
+                        return !!(s && s.note && s.note.noteDetailMap
+                            && Object.keys(s.note.noteDetailMap).length > 0);
+                    }"""
+                )
+            )
+        except Exception:
+            has_state = False
+        if has_state:
+            self._wait_for_data(
+                """() => {
+                    const s = window.__INITIAL_STATE__;
+                    return s && s.note && s.note.noteDetailMap
+                        && Object.keys(s.note.noteDetailMap).length > 0;
+                }""",
+                timeout=8.0,
+                desc="note.noteDetailMap",
+                raise_on_timeout=False,
+            )
 
         # Extract note detail
         for _attempt in range(3):
@@ -264,7 +335,62 @@ class XhsClient:
 
             time.sleep(0.5)
 
-        raise DataFetchError(f"Failed to extract note detail for {note_id}")
+        logger.info("__INITIAL_STATE__ unavailable; extracting note detail from DOM")
+        return self._note_detail_from_dom(note_id, url)
+
+    def _note_detail_from_dom(self, note_id: str, url: str) -> dict:
+        """Extract public note detail from rendered DOM."""
+        self._human_wait(1.0, 2.0)
+        result = self._page.evaluate(
+            """(noteId) => {
+                const text = (el) => (el?.textContent || '').replace(/\\s+/g, ' ').trim();
+                const title =
+                    text(document.querySelector('#detail-title')) ||
+                    text(document.querySelector('[class*="note-content"] [class*="title"]')) ||
+                    text(document.querySelector('h1'));
+                const desc =
+                    text(document.querySelector('#detail-desc')) ||
+                    text(document.querySelector('[class*="note-text"]')) ||
+                    text(document.querySelector('[class*="desc"]'));
+                const author =
+                    text(document.querySelector('[class*="author"] [class*="name"]')) ||
+                    text(document.querySelector('[class*="nickname"]'));
+                const interactionText = text(
+                    document.querySelector('[class*="interact"]')
+                );
+                const commentCount =
+                    text(document.querySelector('[class*="comment"] [class*="count"]')) || '0';
+                const images = Array.from(document.querySelectorAll(
+                    '[class*="note-slider"] img, [class*="carousel"] img, ' +
+                    '[class*="note-content"] img'
+                )).map(img => img.currentSrc || img.src || '').filter(Boolean);
+                return {
+                    title, desc, author, interactionText, commentCount, images,
+                    pageUrl: location.href,
+                    body: (document.body?.innerText || '').slice(0, 1000),
+                };
+            }""",
+            note_id,
+        )
+        if not result or not (result.get("title") or result.get("desc")):
+            raise DataFetchError(
+                f"Failed to extract note detail for {note_id}: "
+                f"URL={getattr(self._page, 'url', '')}"
+            )
+        note = {
+            "noteId": note_id,
+            "title": result.get("title", ""),
+            "desc": result.get("desc", ""),
+            "user": {"nickname": result.get("author", "")},
+            "interactInfo": {
+                "likedCount": 0,
+                "collectedCount": 0,
+                "commentCount": result.get("commentCount", "0"),
+            },
+            "imageList": [{"urlDefault": image} for image in result.get("images", [])],
+            "url": result.get("pageUrl") or url,
+        }
+        return {"note": note}
 
     # ===== User Profile =====
 
@@ -721,6 +847,185 @@ class XhsClient:
 
         return all_notes[:max_count]
 
+    # ===== Creator Analytics =====
+
+    def get_creator_metrics(self) -> dict:
+        """Read the authenticated creator dashboard metrics from rendered DOM."""
+        self._goto(
+            "https://creator.xiaohongshu.com/new/home",
+            timeout=30000,
+            wait_min=2,
+            wait_max=3,
+            context="loading creator metrics",
+        )
+        if "/login" in self._page.url or "/signin" in self._page.url:
+            raise LoginError("Creator dashboard login is required")
+
+        home = self._page.evaluate(
+            """() => {
+                const text = (el) => (el?.textContent || '').replace(/\\s+/g, ' ').trim();
+                const blocks = Array.from(
+                    document.querySelectorAll('.creator-block')
+                ).map(block => ({
+                    title: text(block.querySelector('.title')),
+                    number: text(block.querySelector('.number')) || '0',
+                    tendencyValue: text(block.querySelector('.tendency-number')) || '—',
+                }));
+                return {
+                    accountName: text(document.querySelector('.account-name')),
+                    accountId: (
+                        document.body?.innerText.match(/小红书账号:\\s*([^\\s]+)/) || []
+                    )[1] || '',
+                    blocks,
+                };
+            }"""
+        )
+
+        self._goto(
+            "https://creator.xiaohongshu.com/creator/fans",
+            timeout=30000,
+            wait_min=2,
+            wait_max=3,
+            context="loading creator fan metrics",
+        )
+        fans = self._page.evaluate(
+            """() => {
+                const text = (el) => (el?.textContent || '').replace(/\\s+/g, ' ').trim();
+                const result = {
+                    totalFans: '0', newFans: '0', lostFans: '0', interests: [],
+                };
+                document.querySelectorAll('.block-container').forEach(container => {
+                    const description = text(container.querySelector('.des'));
+                    const value = text(container.querySelector('.con')).replace(/,/g, '');
+                    if (description.includes('总粉丝数')) result.totalFans = value;
+                    else if (description.includes('新增粉丝数')) {
+                        result.newFans = value.match(/\\d+/)?.[0] || '0';
+                    } else if (description.includes('流失粉丝数')) {
+                        result.lostFans = value.match(/\\d+/)?.[0] || '0';
+                    }
+                });
+                result.interests = Array.from(
+                    document.querySelectorAll('.word-cloud-box .row-item')
+                ).map(item => text(item)).filter(Boolean);
+                return result;
+            }"""
+        )
+
+        self._goto(
+            "https://creator.xiaohongshu.com/statistics/account",
+            timeout=30000,
+            wait_min=2,
+            wait_max=3,
+            context="loading creator traffic metrics",
+        )
+        traffic = self._page.evaluate(
+            """() => {
+                const container = document.querySelector('#creator-account-fans-graph');
+                const text = container?.textContent || '';
+                const regex = /([^：:\\s]+)[：:]\\s*(\\d+(?:\\.\\d+)?%)/g;
+                const out = []; const seen = new Set(); let match;
+                while ((match = regex.exec(text)) !== null) {
+                    if (!seen.has(match[1])) {
+                        seen.add(match[1]);
+                        out.push({name: match[1].trim(), percentage: match[2]});
+                    }
+                }
+                return out;
+            }"""
+        )
+
+        blocks = home.get("blocks", []) if isinstance(home, dict) else []
+
+        def metric(*keywords):
+            for block in blocks:
+                if any(keyword in block.get("title", "") for keyword in keywords):
+                    return block.get("number", "0")
+            return "0"
+
+        total_fans = str(fans.get("totalFans", "0")) if isinstance(fans, dict) else "0"
+        new_fans = str(fans.get("newFans", "0")) if isinstance(fans, dict) else "0"
+        lost_fans = str(fans.get("lostFans", "0")) if isinstance(fans, dict) else "0"
+        try:
+            net_fans = str(int(re.sub(r"\\D", "", new_fans) or "0") -
+                           int(re.sub(r"\\D", "", lost_fans) or "0"))
+        except Exception:
+            net_fans = "0"
+        return {
+            "date": time.strftime("%Y-%m-%d"),
+            "account_name": home.get("accountName", "") if isinstance(home, dict) else "",
+            "account_id": home.get("accountId", "") if isinstance(home, dict) else "",
+            "total_fans": total_fans,
+            "new_fans": new_fans,
+            "lost_fans": lost_fans,
+            "net_fans_growth": net_fans,
+            "likes": metric("点赞"),
+            "favorites": metric("收藏"),
+            "comments": metric("评论"),
+            "shares": metric("分享"),
+            "published_notes": metric("笔记"),
+            "reads": metric("阅读"),
+            "read_rate": metric("阅读率"),
+            "avg_read_time": metric("时长", "平均"),
+            "homepage_visitors": metric("主页访客"),
+            "traffic_sources": traffic if isinstance(traffic, list) else [],
+            "fan_interests": fans.get("interests", []) if isinstance(fans, dict) else [],
+        }
+
+    def get_recent_creator_notes(self, limit: int = 20) -> list[dict]:
+        """Read the authenticated creator note manager with DOM fallback."""
+        self._goto(
+            "https://creator.xiaohongshu.com/new/note-manager",
+            timeout=30000,
+            wait_min=2,
+            wait_max=3,
+            context="loading creator note manager",
+        )
+        if "/login" in self._page.url or "/signin" in self._page.url:
+            raise LoginError("Creator dashboard login is required")
+
+        notes: dict[str, dict] = {}
+        for _ in range(max(2, min(12, (limit + 4) // 5 + 1))):
+            batch = self._page.evaluate(
+                """() => {
+                    const text = (el) => (el?.textContent || '').replace(/\\s+/g, ' ').trim();
+                    return Array.from(document.querySelectorAll('.note-card')).map(card => {
+                        let raw = card.getAttribute('data-impression') || '';
+                        let noteId = '';
+                        try {
+                            noteId = JSON.parse(raw)?.noteTarget?.value?.noteId || '';
+                        } catch (_) {}
+                        const stats = Array.from(
+                            card.querySelectorAll('.note-card__stat')
+                        ).map(text);
+                        return {
+                            id: noteId,
+                            title: text(card.querySelector('.note-card__title')) || '未知标题',
+                            publish_time: text(card.querySelector('.note-card__time')),
+                            views: stats[0] || '0',
+                            comments: stats[1] || '0',
+                            likes: stats[2] || '0',
+                            favorites: stats[3] || '0',
+                            shares: stats[4] || '0',
+                            cover: card.querySelector('.note-card__cover img')?.src || '',
+                        };
+                    }).filter(item => item.id);
+                }"""
+            )
+            for note in (batch if isinstance(batch, list) else []):
+                if isinstance(note, dict) and note.get("id"):
+                    notes[note["id"]] = note
+            if len(notes) >= limit:
+                break
+            self._page.evaluate(
+                """() => {
+                    const el = document.querySelector('.content');
+                    if (el) el.scrollTop = el.scrollHeight;
+                    else window.scrollTo(0, document.body.scrollHeight);
+                }"""
+            )
+            self._human_wait(1.0, 1.8)
+        return list(notes.values())[:limit]
+
     # ===== Self Info =====
 
     def get_self_info(self) -> dict:
@@ -739,20 +1044,23 @@ class XhsClient:
             wait_max=2,
             context="loading homepage for self info",
         )
-        self._wait_for_data(
-            """() => {
-                const s = window.__INITIAL_STATE__;
-                if (!s) return false;
-                if (s.user && s.user.userPageData) return true;
-                if (s.user && s.user.currentUser) return true;
-                if (s.user && s.user.userInfo) return true;
-                if (s.sidebar && s.sidebar.user) return true;
-                return false;
-            }""",
-            timeout=10.0,
-            desc="user info",
-            raise_on_timeout=True,
-        )
+        try:
+            self._wait_for_data(
+                """() => {
+                    const s = window.__INITIAL_STATE__;
+                    if (!s) return false;
+                    if (s.user && s.user.userPageData) return true;
+                    if (s.user && s.user.currentUser) return true;
+                    if (s.user && s.user.userInfo) return true;
+                    if (s.sidebar && s.sidebar.user) return true;
+                    return false;
+                }""",
+                timeout=4.0,
+                desc="user info",
+                raise_on_timeout=False,
+            )
+        except LoginError:
+            raise
 
         # Try to extract current user info from homepage state.
         # The data might be in different paths depending on page version.
@@ -792,7 +1100,7 @@ class XhsClient:
         )
 
         if not result:
-            return {}
+            return self._self_info_from_dom()
 
         # Try to find user_id so we can navigate to profile for full info.
         user_id = None
@@ -819,6 +1127,47 @@ class XhsClient:
                 pass
 
         return result
+
+    def _self_info_from_dom(self) -> dict:
+        """Fallback for web builds that no longer expose __INITIAL_STATE__."""
+        data = self._page.evaluate(
+            """() => {
+                const text = (el) => (el?.textContent || '').replace(/\\s+/g, ' ').trim();
+                const profileAnchors = Array.from(
+                    document.querySelectorAll('a[href*="/user/profile/"]')
+                );
+                let userId = '';
+                let nickname = '';
+                for (const anchor of profileAnchors) {
+                    const href = anchor.href || anchor.getAttribute('href') || '';
+                    const match = href.match(/\\/user\\/profile\\/([^/?#]+)/);
+                    const candidate = text(anchor);
+                    if (match && (candidate || anchor.querySelector('img'))) {
+                        userId = match[1];
+                        nickname = candidate;
+                        break;
+                    }
+                }
+                return {
+                    userId,
+                    nickname,
+                    redId: '',
+                    desc: '',
+                    pageText: (document.body?.innerText || '').slice(0, 500),
+                };
+            }"""
+        )
+        if not data or not (data.get("userId") or data.get("nickname")):
+            return {}
+        return {
+            "basicInfo": {
+                "nickname": data.get("nickname", ""),
+                "userId": data.get("userId", ""),
+                "redId": data.get("redId", ""),
+                "desc": data.get("desc", ""),
+            },
+            "interactions": [],
+        }
 
     # ===== Comments via scroll =====
 

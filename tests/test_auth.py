@@ -240,9 +240,26 @@ class TestQrCodeLogin:
     def test_qrcode_login_delegates_to_browser_assisted_flow(self, monkeypatch):
         monkeypatch.setattr(
             "xhs_cli.auth._browser_assisted_qrcode_login",
-            lambda: "a1=browser; web_session=browser-session",
+            lambda qr_png_path=None: (
+                qr_png_path,
+                "a1=browser; web_session=browser-session",
+            )[1],
         )
 
         from xhs_cli.auth import qrcode_login
 
         assert qrcode_login() == "a1=browser; web_session=browser-session"
+
+    def test_qrcode_login_passes_png_output_path(self, monkeypatch):
+        seen = {}
+
+        def _fake(qr_png_path=None):
+            seen["path"] = qr_png_path
+            return "a1=browser; web_session=browser-session"
+
+        monkeypatch.setattr("xhs_cli.auth._browser_assisted_qrcode_login", _fake)
+
+        from xhs_cli.auth import qrcode_login
+
+        assert "web_session" in qrcode_login("/tmp/xhs-login.png")
+        assert seen["path"] == "/tmp/xhs-login.png"

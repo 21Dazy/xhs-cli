@@ -2,6 +2,29 @@
 
 All notable changes to this project will be documented in this file.
 
+## v0.2.0 - 2026-10-21
+
+### Added
+
+- Added `metrics --json` for authenticated creator dashboard metrics.
+- Added `recent --limit N --json` for recent creator-managed notes.
+- Added `login --qrcode --qr-png FILE` so a gateway can deliver QR login to a
+  remote user without terminal access.
+- Added DOM fallbacks for search, note detail, and current-user identity when
+  Xiaohongshu no longer exposes `window.__INITIAL_STATE__`.
+
+### Fixed
+
+- Public search results now preserve the visible `xsec_token` and complete
+  `/search_result/<id>` URL, so third-party public note detail remains readable.
+- `whoami` can recover the current user ID from the rendered profile link when
+  initial state is absent.
+
+### Validation
+
+- Live server validation covers `whoami`, creator metrics, creator recent notes,
+  public search, and third-party public note detail through Camoufox.
+
 ## v0.1.4 - 2026-03-11
 
 ### Changed

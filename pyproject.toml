@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "xhs-cli"
-version = "0.1.4"
+version = "0.2.0"
 description = "A CLI for Xiaohongshu (小红书) — search, read notes, view profiles"
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -35,9 +35,9 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/jackwener/xhs-cli"
-Repository = "https://github.com/jackwener/xhs-cli"
-Issues = "https://github.com/jackwener/xhs-cli/issues"
+Homepage = "https://github.com/21Dazy/xhs-cli"
+Repository = "https://github.com/21Dazy/xhs-cli"
+Issues = "https://github.com/21Dazy/xhs-cli/issues"
 
 [project.scripts]
 xhs = "xhs_cli.cli:cli"

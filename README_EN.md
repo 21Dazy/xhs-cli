@@ -19,9 +19,11 @@ A command-line tool for [Xiaohongshu (小红书)](https://www.xiaohongshu.com) �
 - **User Profile** — view user info, posts, followers, following
 - **Feed** — get recommended content from explore page
 - **Topics** — search for topics and hashtags
+- **Creator data** — read account metrics and recent creator-managed notes
 - **Engage** — like/unlike, favorite/unfavorite, comment, delete
 - **Post** — publish image notes
 - **Auth** — auto-extract cookies from Chrome, or browser-assisted QR login (terminal-rendered)
+- **Remote QR** — save the login QR as a PNG for gateways such as Feishu
 - **JSON output** — `--json` flag for all data commands
 - **Auto token** — `xsec_token` is cached and auto-resolved
 
@@ -31,6 +33,7 @@ A command-line tool for [Xiaohongshu (小红书)](https://www.xiaohongshu.com) �
 |----------|----------|-------------|
 | Auth | `login`, `logout`, `status`, `whoami` | Login, logout, check status, view profile |
 | Read | `search`, `read`, `feed`, `topics` | Search notes, read details, explore feed, find topics |
+| Creator | `metrics`, `recent` | Read creator dashboard metrics and recent notes |
 | Users | `user`, `user-posts`, `followers`, `following` | View profile, list posts/followers/following |
 | Engage | `like`, `unlike`, `comment`, `delete` | Like, unlike, comment, delete notes |
 | Favorites | `favorite`, `unfavorite`, `favorites` | Favorite, unfavorite, list all favorites |
@@ -54,7 +57,7 @@ pipx install xhs-cli
 <summary>Install from source (for development)</summary>
 
 ```bash
-git clone git@github.com:jackwener/xhs-cli.git
+git clone git@github.com:21Dazy/xhs-cli.git
 cd xhs-cli
 uv sync
 ```
@@ -103,6 +106,9 @@ xhs login
 # Force QR code login (useful for troubleshooting auth)
 xhs login --qrcode
 
+# Save the QR as a PNG for delivery through a remote gateway
+xhs login --qrcode --qr-png /tmp/xhs-login.png
+
 # Or provide cookie string manually (must include a1 and web_session)
 xhs login --cookie "a1=xxx; web_session=yyy"
 
@@ -117,6 +123,17 @@ xhs whoami --json
 # Logout
 xhs logout
 ```
+
+### Creator data
+
+```bash
+xhs metrics
+xhs metrics --json
+xhs recent --limit 10
+xhs recent --limit 10 --json
+```
+
+Both commands use the Camoufox headless browser and do not require Xvfb.
 
 ### Search
 
@@ -201,17 +218,17 @@ xhs --help
 ```
 CLI (click) → XhsClient (camoufox browser)
                   ↓ navigate to real pages
-              window.__INITIAL_STATE__ → extract structured data
+              window.__INITIAL_STATE__ → DOM fallback → structured data
 ```
 
-Uses [camoufox](https://github.com/daijro/camoufox) (anti-fingerprint Firefox) to browse Xiaohongshu like a real user. Data is extracted from `window.__INITIAL_STATE__` — completely indistinguishable from normal browsing.
+Uses [camoufox](https://github.com/daijro/camoufox) (anti-fingerprint Firefox) to browse Xiaohongshu like a real user. Data is extracted from `window.__INITIAL_STATE__`, with DOM fallbacks for newer web builds.
 
 ## How It Works
 
-1. **Authentication** — First reads `~/.xhs-cli/cookies.json`; if missing, extracts cookies from local Chrome via browser-cookie3. `xhs login --qrcode` uses browser-assisted QR login with terminal half-block rendering (`▀ ▄ █`).
+1. **Authentication** — First reads `~/.xhs-cli/cookies.json`; if missing, extracts cookies from local Chrome via browser-cookie3. `xhs login --qrcode` uses browser-assisted QR login with terminal half-block rendering (`▀ ▄ █`). `--qr-png FILE` additionally saves a gateway-deliverable image.
 2. **Session Validation** — After login, the CLI verifies that the session is non-guest and probes feed/search usability. If probe fails, it asks for re-login.
 3. **Browsing** — Each operation navigates to real pages using camoufox, making all traffic look like normal user browsing.
-4. **Data Extraction** — Structured data is pulled from `window.__INITIAL_STATE__`.
+4. **Data Extraction** — Structured data is pulled from `window.__INITIAL_STATE__`; search, note detail, and current-user identity fall back to the rendered DOM when state is unavailable.
 5. **Token Caching** — After search/feed, `xsec_token` is auto-cached to `~/.xhs-cli/token_cache.json`.
 6. **Interactions** — Like, favorite, and comment work by clicking actual DOM buttons.
 
@@ -224,11 +241,11 @@ xhs-cli ships with a [`SKILL.md`](./SKILL.md) that teaches AI agents how to use 
 ```bash
 # Clone into your project's skills directory
 mkdir -p .agents/skills
-git clone git@github.com:jackwener/xhs-cli.git .agents/skills/xhs-cli
+git clone git@github.com:21Dazy/xhs-cli.git .agents/skills/xhs-cli
 
 # Or just copy the SKILL.md
 curl -o .agents/skills/xhs-cli/SKILL.md \
-  https://raw.githubusercontent.com/jackwener/xhs-cli/main/SKILL.md
+  https://raw.githubusercontent.com/21Dazy/xhs-cli/main/SKILL.md
 ```
 
 Once added, AI agents that support the `.agents/skills/` convention will automatically discover and use xhs-cli commands.
